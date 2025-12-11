@@ -1,0 +1,201 @@
+library(tidyverse)
+source('Scripts/load_data.R', local = TRUE)
+# =========================
+# 1) Leer y limpiar datos
+# =========================
+
+isrr5_1_18 <- load_data("Data/EXCEL_I5-1AL18.xlsx", c(1,10,21))
+isrr5_19_35 <- load_data("Data/EXCEL_I5-19AL35.xlsx", c(1,10,20))
+isrr5_36_52 <- load_data("Data/EXCEL_I5-36AL52.xlsx", c(1,10,20))
+isrr5_53_69 <- load_data("Data/EXCEL_I5-53AL69.xlsx", c(1,10,20))
+isrr5_70_86 <- load_data("Data/EXCEL_I5-70AL86.xlsx", c(1,10,20))
+issr5 <- rbind(isrr5_1_18,isrr5_19_35,isrr5_36_52,isrr5_53_69,isrr5_70_86)
+
+
+tmp <- sort(issr5$Size_pb)
+diff(tmp)
+# =========================
+# 2) Definir intervalos de tamaño (marcadores)
+# =========================
+
+# x: vector numérico de tamaños (bp)
+# gap_thr: diferencia mínima (en bp) para considerar que hay un cambio de grupo
+find_breaks <- function(x, gap_thr = 45) {
+  xs   <- sort(na.omit(x))
+  gaps <- diff(xs)
+  
+  # puntos donde el "salto" es grande
+  idx_big_gap <- which(gaps > gap_thr)
+  
+  # punto medio entre los dos valores que forman el hueco
+  cut_points <- xs[idx_big_gap] + gaps[idx_big_gap] / 2
+  
+  # extremos del rango + un pequeño margen
+  breaks <- c(min(xs) - 1, cut_points, max(xs) + 1)
+  breaks
+}
+
+# Puedes ajustar gap_thr según lo cerrado/abierto que quieras los grupos
+breaks  <- find_breaks(issr5$Size_pb, gap_thr = 10)
+centers <- (head(breaks, -1) + tail(breaks, -1)) / 2
+
+# etiquetas de marcador, por ejemplo: M1_1576, M2_972, ...
+labels <- paste0("ISSR5", "_", round(centers))
+
+# =========================
+# 3) Asignar marcador por tamaño + tipo de banda (a/b)
+# =========================
+
+data_markers <- issr5 %>%
+  mutate(
+    marcador_probable = cut(
+      Size_pb,
+      breaks = breaks,
+      labels = labels,
+      include.lowest = TRUE
+    )
+  ) %>%
+  # Clasificamos grosor relativo dentro de cada marcador:
+  # a = banda gruesa (>= mediana de grosor)
+  # b = banda delgada (< mediana de grosor)
+  group_by(marcador_probable) %>%
+  mutate(
+    umbral_grosor = median(Banda_tamanho, na.rm = TRUE),
+    tipo_banda    = if_else(Banda_tamanho >= umbral_grosor, "a", "b")
+  ) %>%
+  ungroup() %>%
+  mutate(
+    marcador_ab = paste0(as.character(marcador_probable), "_", tipo_banda)
+  )
+
+# =========================
+# 4) Gráfico de control (tamaños + cortes)
+# =========================
+
+ggplot(data_markers, aes(x = Size_pb)) +
+  geom_histogram(bins = 60, fill = "grey70") +
+  geom_vline(xintercept = centers, linetype = 2) +
+  labs(x = "Base pairs (bp)", y = "Frecuencia") +
+  theme_minimal()
+
+# =========================
+# 5) Matriz presencia/ausencia
+#    (marcador + tipo de banda a/b)
+# =========================
+
+matriz_pa_ab <- data_markers %>%
+  filter(!is.na(marcador_ab), !is.na(Lane)) %>%
+  mutate(valor = 1L) %>%
+  select(Lane, marcador_ab, valor) %>%
+  distinct(Lane, marcador_ab, .keep_all = TRUE) %>%  # evitar duplicados exactos
+  pivot_wider(
+    id_cols    = Lane,
+    names_from = marcador_ab,
+    values_from = valor,
+    values_fill = 0L,
+    values_fn  = max   # 0 = ausencia, 1 = presente
+  ) %>%
+  arrange(Lane)
+
+# Matriz solo por tamaño (ignorando grosor):
+matriz_pa_size <- data_markers %>%
+  filter(!is.na(marcador_probable), !is.na(Accesion)) %>%
+  mutate(valor = 1L) %>%
+  select(Accesion, marcador_probable, valor) %>%
+  distinct(Accesion, marcador_probable, .keep_all = TRUE) %>%
+  pivot_wider(
+    id_cols    = Accesion,
+    names_from = marcador_probable,
+    values_from = valor,
+    values_fill = 0L,
+    values_fn  = max
+  ) %>%
+  arrange(Accesion)
+
+## install.packages('BiocManager')
+## BiocManager::install('adegenet')
+
+library(adegenet)
+
+
+
+dependencies <- c("adegenet","ggplot2","hierfstat","poppr","corehunter","ape",
+                  "pheatmap","edgeR","readr","reshape2","tidyr","polysat","dplyr")
+
+# devtools 
+
+if( !is.element("devtools",rownames(installed.packages() ) ) ){
+  install.packages("devtools")
+  install.packages("BiocManager")
+}
+library(devtools)
+
+# Install missing packages
+
+missingPackages <- function(pkg){
+  if( !is.element(pkg,rownames(installed.packages() ) ) ){
+    message(pkg, "-----> Package is not installed ")
+    BiocManager::install(pkg)
+  }
+}
+
+for(i in dependencies){
+  missingPackages(i)
+  library(i, character.only = TRUE)
+}
+
+
+genind_object <- function(object, ploidy = 2, metadata){
+  ploidy(object) <- ploidy
+  indNames(object) <- metadata$Sample
+  strata(object) <- data.frame(metadata$Pop)
+  nameStrata(object) <- ~Pop
+  
+  # Summary of object
+  print(table(strata(object, ~Pop)))
+  print(summary(object))
+  # object@tab
+  return(object)
+}
+
+library(adegenet)
+matriz_pa_size <- as.data.frame(matriz_pa_size)
+row.names(matriz_pa_size) <- matriz_pa_size$Accesion
+## Convert genepop data to complete genind data
+my_genlight <- adegenet::df2genind(matriz_pa_size,
+                           ploidy = 10,   # o 1 si son haploides
+                           ncode  = 1)   # 1 dígito por alelo (0,1,2)
+## Load and set up metadata
+mapa_ind_tree <- read.csv2("Data/Data_pasaporte.csv")
+rownames(mapa_ind_tree) <- mapa_ind_tree$CODIGO.DE.ACCESIÓN
+
+
+
+id_gen <- indNames(my_genlight)   # nombres de individuos en genlight
+id_meta <- mapa_ind_tree$CODIGO.DE.ACCESIÓN       # columna con IDs en tu CSV
+## Create complete genind object
+
+mapa_ind_tmp <- mapa_ind_tree %>% filter(CODIGO.DE.ACCESIÓN %in% matriz_pa_size$Accesion)
+
+pop(my_genlight) <- mapa_ind_tmp$PROVINCIA
+
+
+MASHUA <- my_genlight
+library(adegenet)
+library(hierfstat)
+library(poppr)
+library(pegas)   #
+
+
+
+MASHUA
+sum_MASHUA <- summary(MASHUA)
+
+# Número de individuos, loci y poblaciones
+n_ind <- nInd(MASHUA)
+n_loc <- nLoc(MASHUA)
+pops  <- levels(pop(MASHUA))
+
+n_ind; n_loc; pops
+# Para mirar el resumen completo:
+sum_MASHUA

@@ -1,0 +1,29 @@
+# Asegúrate de que la matriz sea solo numérica (sin la columna Accesion)
+# Como ya pusiste los row.names, podemos quitar la columna 1
+datos_binarios <- matriz_pa_size[, -1] 
+
+# Crear el objeto genind especificando tipo Presencia/Ausencia
+MASHUA <- df2genind(datos_binarios,
+                    ploidy = 1,      # Para datos dominantes P/A se usa ploidy=1 (pseudo-haploide)
+                    type = "PA",     # CRÍTICO: Indica que son datos binarios (0/1)
+                    pop = mapa_ind_tmp$DEPARTAMENTO) # Asignamos la población directamente aquí
+
+# Verificar
+MASHUA
+
+
+library(poppr)
+
+# Tabla básica de diversidad por población
+# Hexp = Diversidad genética de Nei (equivalente a He para dominantes)
+# ia = Índice de asociación (reproducción clonal vs sexual)
+tabla_diversidad <- poppr(MASHUA)
+
+print(tabla_diversidad)
+
+# Si quieres graficar la diversidad (Hexp)
+library(ggplot2)
+ggplot(tabla_diversidad, aes(x = Pop, y = Hexp, fill = Pop)) +
+  geom_bar(stat = "identity", color = "black") +
+  theme_minimal() +
+  labs(title = "Diversidad Genética de Nei por Provincia", y = "He (Nei)")

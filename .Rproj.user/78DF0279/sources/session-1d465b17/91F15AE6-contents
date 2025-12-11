@@ -1,0 +1,24 @@
+# matriz_pa_size sale de tu pipeline anterior:
+#   - una fila por accesión
+#   - columnas 2:n son 0/1 (ausencia/presencia de banda ISSR)
+
+matriz_pa_size <- as.data.frame(matriz_pa_size)
+
+# Poner Accesion como rownames y quitarla de la matriz de loci
+rownames(matriz_pa_size) <- matriz_pa_size$Accesion
+
+X <- matriz_pa_size[, -1]  # solo loci
+# Por si acaso hay chars/factores:
+X[] <- lapply(X, function(z) as.numeric(as.character(z)))
+
+
+library(adegenet)
+
+ISSR_genind <- df2genind(
+  X,
+  type   = "PA",  # PA = presence/absence (dominante)
+  ploidy = 2      # ploidía "ficticia" diploide, estándar para ISSR/AFLP
+)
+
+ISSR_genind
+summary(ISSR_genind)
